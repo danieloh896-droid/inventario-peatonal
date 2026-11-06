@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Inventario Peatonal Univalle</title>
+<style>
+:root{--rojo:#BA0C2F;--rojo-osc:#8C0721;--fondo:#F4F6F8;--borde:#DEE2E6;--tinta:#212529;--suave:#495057;
+--ok:#0B7A4B;--medio:#B45309;--mal:#B42318;--gris:#6B7280}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",Roboto,Arial,sans-serif;background:var(--fondo);color:var(--tinta);padding:max(12px,env(safe-area-inset-top)) 12px 24px;font-variant-numeric:tabular-nums}
+header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid var(--rojo);padding-bottom:8px;margin-bottom:12px}
+h1{font-size:1.05rem;color:var(--rojo-osc);font-weight:800}
+.enlace{font-size:.8rem;font-weight:700;display:flex;gap:6px;align-items:center}
+.punto{width:10px;height:10px;border-radius:50%;background:var(--gris)}
+.estado{border-radius:10px;padding:16px;color:#fff;background:var(--gris);margin-bottom:12px}
+.estado.ok{background:var(--ok)}.estado.medio{background:var(--medio)}.estado.mal{background:var(--mal)}
+.estado b{display:block;font-size:1.9rem;line-height:1.1}
+.estado span{font-size:.9rem;opacity:.95}
+.rejilla{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.dato{background:#fff;border:1px solid var(--borde);border-radius:8px;padding:10px 12px;border-left:4px solid var(--gris)}
+.dato.ok{border-left-color:var(--ok)}.dato.medio{border-left-color:var(--medio)}.dato.mal{border-left-color:var(--mal)}
+.dato small{display:block;color:var(--suave);font-size:.75rem;margin-bottom:2px}
+.dato b{font-size:1.25rem}
+.bloque{background:#fff;border:1px solid var(--borde);border-radius:8px;padding:12px;margin-bottom:12px}
+.bloque h2{font-size:.85rem;color:var(--rojo-osc);margin-bottom:8px}
+.fila{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #F1F3F5;font-size:.95rem}
+.fila:last-child{border:0}.fila span{color:var(--suave)}
+details{font-size:.8rem;color:var(--suave)}
+pre{white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;background:#F8F9FA;padding:8px;border-radius:6px;margin-top:6px;font-size:.7rem}
+</style>
+</head>
+<body>
+<header><h1>Inventario Peatonal Univalle</h1>
+<div class="enlace"><i class="punto" id="punto"></i><span id="enlace">Buscando receptor</span></div></header>
+
+<div class="estado" id="estado"><b id="sol">Sin datos</b><span id="solDet">Conecta el móvil al WiFi del receptor.</span></div>
+
+<div class="rejilla">
+<div class="dato" id="tSat"><small>Satélites</small><b id="sat">-</b></div>
+<div class="dato" id="tPdop"><small>PDOP</small><b id="pdop">-</b></div>
+<div class="dato" id="tHrms"><small>Precisión horizontal</small><b id="hrms">-</b></div>
+<div class="dato" id="tVrms"><small>Precisión vertical</small><b id="vrms">-</b></div>
+<div class="dato" id="tEdad"><small>Edad de correcciones</small><b id="edad">-</b></div>
+<div class="dato"><small>Batería del receptor</small><b id="bat">-</b></div>
+</div>
+
+<div class="bloque"><h2>Posición (EPSG:4326)</h2>
+<div class="fila"><span>Latitud</span><b id="lat">-</b></div>
+<div class="fila"><span>Longitud</span><b id="lon">-</b></div>
+<div class="fila"><span>Altura elipsoidal</span><b id="alt">-</b></div>
+<div class="fila"><span>Hora GPS</span><b id="hora">-</b></div></div>
+
+<div class="bloque"><h2>Satélites por constelación</h2>
+<div class="fila"><span>GPS</span><b id="cGps">-</b></div>
+<div class="fila"><span>GLONASS</span><b id="cGlo">-</b></div>
+<div class="fila"><span>BeiDou</span><b id="cBds">-</b></div>
+<div class="fila"><span>Galileo</span><b id="cGal">-</b></div>
+<div class="fila"><span>HDOP / VDOP</span><b id="hv">-</b></div>
+<div class="fila"><span>Estación de referencia</span><b id="ref">-</b></div></div>
+
+<details class="bloque"><summary>Diagnóstico</summary>
+<div class="fila"><span>Valor TYPE del receptor</span><b id="rawType">-</b></div>
+<div class="fila"><span>Lectura por red WiFi</span><b id="via">-</b></div>
+<div class="fila"><span>Última respuesta</span><b id="ult">-</b></div>
+<pre id="xml"></pre></details>
+
+<script>
+const BASE='http://192.168.10.1';
+const nativo=!!(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform());
+const Receptor=nativo?Capacitor.registerPlugin('Receptor'):null;
+// Codificación provisional de POSITION/TYPE (a confirmar en campo con el panel de diagnóstico)
+const TIPOS={0:['Sin solución','mal'],1:['Autónomo','mal'],2:['DGNSS','medio'],4:['RTK fijo','ok'],5:['RTK flotante','medio']};
+const $=id=>document.getElementById(id);
+let ultimoOk=0,viaWifi='-',ciclo=0;
+
+async function leer(ruta){
+  const u=BASE+ruta+'?'+Math.random()+'&action=purge&_='+Date.now();
+  if(Receptor){const r=await Receptor.get({url:u});viaWifi=r.viaWifi?'Sí':'No';return r.data}
+  const r=await fetch(u);return r.text();
+}
+function xml(t){return new DOMParser().parseFromString(t,'text/xml')}
+const val=(d,s)=>{const e=d.querySelector(s);return e?e.textContent.trim():''};
+const num=(v)=>{const n=parseFloat(v);return isNaN(n)?null:n};
+function marca(id,clase){$(id).className='dato '+(clase||'')}
+function metros(v){const n=num(v);if(n===null)return '-';return n<1?(n*100).toFixed(1)+' cm':n.toFixed(2)+' m'}
+
+function pintarGps(t){
+  const d=xml(t);
+  const tipo=val(d,'POSITION > TYPE');
+  const info=TIPOS[tipo]||['Tipo '+tipo,'medio'];
+  $('estado').className='estado '+info[1];
+  $('sol').textContent=info[0];
+  $('rawType').textContent=tipo||'-';
+  const hr=num(val(d,'RMS > HRMS'));
+  $('solDet').textContent=hr===null?'':'Precisión horizontal estimada: '+metros(hr);
+  const sat=num(val(d,'SATELITES > ALL'));
+  $('sat').textContent=sat===null?'-':sat; marca('tSat',sat===null?'':sat>=12?'ok':sat>=7?'medio':'mal');
+  const pd=num(val(d,'DOP > PDOP'));
+  $('pdop').textContent=pd===null?'-':pd.toFixed(2); marca('tPdop',pd===null?'':pd<=2?'ok':pd<=3.5?'medio':'mal');
+  $('hrms').textContent=metros(val(d,'RMS > HRMS')); marca('tHrms',hr===null?'':hr<=0.05?'ok':hr<=0.5?'medio':'mal');
+  $('vrms').textContent=metros(val(d,'RMS > VRMS'));
+  const ed=num(val(d,'REFSTATION > AGE'));
+  $('edad').textContent=ed===null?'-':ed.toFixed(1)+' s'; marca('tEdad',ed===null?'':ed<=5?'ok':ed<=15?'medio':'mal');
+  $('lat').textContent=val(d,'POSITION > LAT')||'-';
+  $('lon').textContent=val(d,'POSITION > LON')||'-';
+  $('alt').textContent=(val(d,'POSITION > HEIGHT')||'-')+' m';
+  $('hora').textContent=(val(d,'TIME > GPSDATE')+' '+val(d,'TIME > GPSTIME')).trim()||'-';
+  $('cGps').textContent=val(d,'SATELITES > GPS')||'-';
+  $('cGlo').textContent=val(d,'SATELITES > GLONASS')||'-';
+  $('cBds').textContent=val(d,'SATELITES > BEIDOU')||'-';
+  $('cGal').textContent=val(d,'SATELITES > GALILEO')||'-';
+  $('hv').textContent=(val(d,'DOP > HDOP')||'-')+' / '+(val(d,'DOP > VDOP')||'-');
+  $('ref').textContent=val(d,'REFSTATION > ID')||'Sin correcciones';
+  $('xml').textContent=t.slice(0,3000);
+}
+function pintarDev(t){
+  const d=xml(t);const n=val(d,'POWER_LEVEL');
+  $('bat').textContent=n?n+' %':'-';
+}
+function enlace(ok){
+  $('punto').style.background=ok?'var(--ok)':'var(--mal)';
+  $('enlace').textContent=ok?'Receptor conectado':'Sin respuesta del receptor';
+  if(!ok){$('estado').className='estado';$('sol').textContent='Sin conexión';$('solDet').textContent='Revisa que el móvil esté unido al WiFi del receptor.'}
+}
+async function bucle(){
+  try{
+    pintarGps(await leer('/realtime/gps.xml'));
+    if(ciclo++%5===0)pintarDev(await leer('/config/device.xml'));
+    ultimoOk=Date.now();enlace(true);
+    $('ult').textContent=new Date().toLocaleTimeString();
+  }catch(e){if(Date.now()-ultimoOk>3000)enlace(false);$('xml').textContent=String(e)}
+  $('via').textContent=nativo?viaWifi:'No aplica (navegador)';
+  setTimeout(bucle,1000);
+}
+bucle();
+</script>
+</body>
+</html>
