@@ -9,7 +9,7 @@
 --ok:#0B7A4B;--medio:#B45309;--mal:#B42318;--gris:#6B7280}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:"Segoe UI",Roboto,Arial,sans-serif;background:var(--fondo);color:var(--tinta);padding:max(12px,env(safe-area-inset-top)) 12px 24px;font-variant-numeric:tabular-nums}
-header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid var(--rojo);padding-bottom:8px;margin-bottom:12px}
+header{display:flex;flex-wrap:wrap;gap:6px;justify-content:space-between;align-items:center;border-bottom:2px solid var(--rojo);padding-bottom:8px;margin-bottom:12px}
 h1{font-size:1.05rem;color:var(--rojo-osc);font-weight:800}
 .enlace{font-size:.8rem;font-weight:700;display:flex;gap:6px;align-items:center}
 .punto{width:10px;height:10px;border-radius:50%;background:var(--gris)}
@@ -31,11 +31,12 @@ pre{white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;bac
 </style>
 </head>
 <body>
-<header><h1>Inventario Peatonal Univalle</h1>
+<header><h1>Inventario Peatonal Univalle <small style="font-weight:400;color:#6B7280">v0.3</small></h1>
 <div class="enlace"><i class="punto" id="punto"></i><span id="enlace">Buscando receptor</span></div></header>
 
 <div class="estado" id="estado"><b id="sol">Sin datos</b><span id="solDet">Conecta el móvil al WiFi del receptor.</span></div>
 
+<button onclick="location.reload()" style="width:100%;padding:12px;margin-bottom:12px;border:0;border-radius:8px;background:var(--rojo);color:#fff;font-size:1rem;font-weight:700">Reconectar</button>
 <div class="rejilla">
 <div class="dato" id="tSat"><small>Satélites</small><b id="sat">-</b></div>
 <div class="dato" id="tPdop"><small>PDOP</small><b id="pdop">-</b></div>
@@ -63,12 +64,13 @@ pre{white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;bac
 <div class="fila"><span>Valor TYPE del receptor</span><b id="rawType">-</b></div>
 <div class="fila"><span>Lectura por red WiFi</span><b id="via">-</b></div>
 <div class="fila"><span>Última respuesta</span><b id="ult">-</b></div>
-<pre id="xml"></pre></details>
+<pre id="diag"></pre><pre id="xml"></pre></details>
 
 <script>
+window.onerror=function(m){var e=document.getElementById('solDet');if(e)e.textContent='Error en la app: '+m};
 const BASE='http://192.168.10.1';
 const nativo=!!(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform());
-const Receptor=nativo?Capacitor.registerPlugin('Receptor'):null;
+let Receptor=null;try{if(nativo){Receptor=(Capacitor.Plugins&&Capacitor.Plugins.Receptor)||(typeof Capacitor.registerPlugin==='function'?Capacitor.registerPlugin('Receptor'):null)}}catch(e){document.getElementById('solDet').textContent='Error del componente nativo: '+e}
 // Codificación provisional de POSITION/TYPE (a confirmar en campo con el panel de diagnóstico)
 const TIPOS={0:['Sin solución','mal'],1:['Autónomo','mal'],2:['DGNSS','medio'],4:['RTK fijo','ok'],5:['RTK flotante','medio']};
 const $=id=>document.getElementById(id);
@@ -76,7 +78,7 @@ let ultimoOk=0,viaWifi='-',ciclo=0;
 
 async function leer(ruta){
   const u=BASE+ruta+'?'+Math.random()+'&action=purge&_='+Date.now();
-  if(Receptor){const r=await Receptor.get({url:u});viaWifi=r.viaWifi?'Sí':'No';return r.data}
+  if(Receptor){const r=await Promise.race([Receptor.get({url:u}),new Promise((_,no)=>setTimeout(()=>no(new Error('Tiempo agotado esperando al receptor')),6000))]);viaWifi=r.viaWifi?'Sí':'No';return r.data}
   const r=await fetch(u);return r.text();
 }
 function xml(t){return new DOMParser().parseFromString(t,'text/xml')}
@@ -129,10 +131,15 @@ async function bucle(){
     if(ciclo++%5===0)pintarDev(await leer('/config/device.xml'));
     ultimoOk=Date.now();enlace(true);
     $('ult').textContent=new Date().toLocaleTimeString();
-  }catch(e){if(Date.now()-ultimoOk>3000)enlace(false);$('xml').textContent=String(e)}
+  }catch(e){if(Date.now()-ultimoOk>3000)enlace(false);$('xml').textContent=String(e);if(!nativo)$('solDet').textContent='Abierto fuera de la app: no puede leer el receptor.';else if(!Receptor)$('solDet').textContent='El componente nativo del receptor no está disponible.'}
   $('via').textContent=nativo?viaWifi:'No aplica (navegador)';
   setTimeout(bucle,1000);
 }
+function diag(){const C=window.Capacitor;
+ $('diag').textContent=['Versión de la app: v0.3','Capacitor: '+(C?'sí':'no'),'Plataforma nativa: '+(nativo?'sí':'no'),
+ 'Componente Receptor: '+(Receptor?'disponible':'no disponible'),'Componentes: '+(C&&C.Plugins?Object.keys(C.Plugins).join(', '):'-')].join('\n')}
+diag();
+setTimeout(()=>{if(!ultimoOk&&$('solDet').textContent.indexOf('Error')<0)$('solDet').textContent='Sin respuesta todavía. Pulsa Reconectar y revisa el Diagnóstico.'},4000);
 bucle();
 </script>
 </body>
