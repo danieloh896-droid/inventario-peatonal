@@ -1,0 +1,22 @@
+PAQUETE DE EXPORTACION - Inventario Peatonal Univalle
+
+Contenido
+  inventario_peatonal.gpkg   GeoPackage con las capas: tramos (linea), tramos_vertices, mobiliario,
+                             obstaculos (puntos) y la tabla fotos. Geometria en EPSG:4326; cada registro
+                             trae ademas las coordenadas en EPSG:3115 y 9377, el tipo de solucion
+                             (autonomo, DGNSS, RTK flotante o RTK fijo), PDOP, precision y satelites.
+                             Abre directo en QGIS y ArcGIS Pro.
+  fotos/                     Fotos de los registros. La tabla fotos del GeoPackage las relaciona.
+  datos.json                 Los mismos datos en JSON (lo usa el script de la GDB).
+  crear_gdb.py               Script de ArcGIS Pro que crea la geodatabase con dominios y fotos adjuntas.
+
+Como crear la GDB en ArcGIS Pro
+  1. Descomprime todo el ZIP en una carpeta.
+  2. En ArcGIS Pro abre Analisis > Python > Ventana Python y ejecuta el contenido de crear_gdb.py
+     (o corre el archivo con propy.bat). Si usas la ventana Python, cambia AQUI por la ruta de la carpeta.
+  3. Se crea inventario_peatonal.gdb en esa carpeta. Las geometrias quedan en EPSG:9377 (se puede
+     cambiar en SR_GDB al inicio del script).
+
+Notas
+  - Los dominios de la GDB son de codigos numericos (1, 2, 3...) con la etiqueta como descripcion.
+  - El GeoPackage guarda las etiquetas en texto.
