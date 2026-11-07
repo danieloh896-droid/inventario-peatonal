@@ -42,7 +42,7 @@ details{font-size:.8rem;color:var(--suave)}.oculto{display:none}
 </style>
 </head>
 <body>
-<header><h1>Inventario Peatonal Univalle <small>v0.5</small></h1>
+<header><div style="display:flex;align-items:center;gap:8px"><img id="logo" src="logo.png" alt="" style="height:38px" onerror="this.remove()"><h1>Inventario Peatonal Univalle <small>v0.6</small></h1></div>
 <div class="enlace"><i class="punto" id="punto"></i><span id="enlace">Buscando receptor</span></div></header>
 <nav><button id="nCaptura" class="on" onclick="ver('Captura')">Captura</button><button id="nReceptor" onclick="ver('Receptor')">Receptor</button><button id="nMapa" onclick="ver('Mapa')">Mapa</button><button id="nRegistros" onclick="ver('Registros')">Registros</button></nav>
 <div class="mini" id="mini"><b id="mSol">Sin datos</b><span id="mDet"></span></div>
@@ -82,10 +82,12 @@ details{font-size:.8rem;color:var(--suave)}.oculto{display:none}
 <section id="vMapa" class="oculto"><div class="seg"><button id="bOsm" class="on" onclick="baseMapa('osm')">Calles</button><button id="bSat" onclick="baseMapa('sat')">Satélite</button></div>
 <div id="mapa"></div><div class="dos"><button class="btn sec" onclick="centrar()">Mi posición</button><button class="btn sec" onclick="descargarZona()">Descargar zona</button></div>
 <div class="fila" style="margin-top:8px"><span>Teselas guardadas offline</span><b id="nTeselas">0</b></div></section>
-<section id="vRegistros" class="oculto"><div id="lista"></div></section>
+<section id="vRegistros" class="oculto"><button class="btn" onclick="exportar()">Exportar paquete (ZIP)</button><div id="lista" style="margin-top:10px"></div></section>
 <div id="msg"></div>
 
 <script src="lib/leaflet.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="lib/sql-wasm.js"></script>
 <script>
 window.onerror=function(m){aviso('Error en la app: '+m,1)};
 //#PROJ
@@ -214,7 +216,7 @@ function enlace(ok){$('punto').style.background=ok?'var(--ok)':'var(--mal)';$('e
 async function bucle(){try{pintarGps(await leer('/realtime/gps.xml'));if(ciclo++%5===0)pintarDev(await leer('/config/device.xml'));ultimoOk=Date.now();enlace(true);$('ult').textContent=new Date().toLocaleTimeString()}
  catch(e){if(Date.now()-ultimoOk>3000)enlace(false);$('xml').textContent=String(e)}
  $('via').textContent=nativo?viaWifi:'No aplica (navegador)';setTimeout(bucle,1000)}
-const C=window.Capacitor;$('diag').textContent=['App v0.5','Nativa: '+(nativo?'sí':'no'),'Componente Receptor: '+(Receptor?'disponible':'no disponible'),'Componentes: '+(C&&C.Plugins?Object.keys(C.Plugins).join(', '):'-')].join('\n');
+const C=window.Capacitor;$('diag').textContent=['App v0.6','Nativa: '+(nativo?'sí':'no'),'Componente Receptor: '+(Receptor?'disponible':'no disponible'),'Componentes: '+(C&&C.Plugins?Object.keys(C.Plugins).join(', '):'-')].join('\n');
 
 // ---------- Fotos ----------
 function redimensionar(f){return new Promise((ok,no)=>{const im=new Image(),u=URL.createObjectURL(f);im.onload=()=>{const k=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);c.toBlob(b=>b?ok(b):no(new Error('Foto no válida')),'image/jpeg',0.82)};im.onerror=()=>no(new Error('No se pudo leer la foto'));im.src=u})}
@@ -250,6 +252,48 @@ async function descargarZona(){if(!mapa)return;const b=mapa.getBounds(),z0=mapa.
  const u=BASES[baseAct].u;let hechas=0,fallos=0;
  for(let i=0;i<L_.length;i+=6){await Promise.all(L_.slice(i,i+6).map(([z,x,y])=>teselaBlob(baseAct+'/'+z+'/'+x+'/'+y,u.replace('{z}',z).replace('{x}',x).replace('{y}',y)).catch(()=>fallos++)));hechas=Math.min(i+6,L_.length);aviso('Descargando '+hechas+' de '+L_.length)}
  await contarT();aviso(fallos?'Descarga con '+fallos+' fallos. ¿Hay internet?':'Zona guardada para uso sin internet',!!fallos)}
+
+// ---------- Exportación: ZIP con GeoPackage, fotos, datos.json y script de ArcGIS Pro ----------
+const POSC=[['lat','REAL'],['lon','REAL'],['alt','REAL'],['e3115','REAL'],['n3115','REAL'],['e9377','REAL'],['n9377','REAL'],['solucion','TEXT'],['pdop','REAL'],['hdop','REAL'],['hrms','REAL'],['vrms','REAL'],['sats','INTEGER'],['hora','TEXT']];
+const dePos=p=>({lat:p.lat,lon:p.lon,alt:p.alt,e3115:p.x3115,n3115:p.y3115,e9377:p.x9377,n9377:p.y9377,solucion:p.solucion,pdop:p.pdop,hdop:p.hdop,hrms:p.hrms,vrms:p.vrms,sats:p.sats,hora:p.hora});
+const colsDe=k=>ESQ[k].c.map(c=>[c[0],c[2]==='num'?'REAL':'TEXT']);
+function cab(n,tipo,extra){const b=new DataView(new ArrayBuffer(n));b.setUint8(0,0x47);b.setUint8(1,0x50);b.setUint8(2,0);b.setUint8(3,1);b.setInt32(4,4326,true);b.setUint8(8,1);b.setUint32(9,tipo,true);return b}
+const ptBlob=(lo,la)=>{const b=cab(29,1);b.setFloat64(13,lo,true);b.setFloat64(21,la,true);return new Uint8Array(b.buffer)};
+const lnBlob=v=>{const b=cab(17+16*v.length,2);b.setUint32(13,v.length,true);v.forEach((p,i)=>{b.setFloat64(17+16*i,p.lon,true);b.setFloat64(25+16*i,p.lat,true)});return new Uint8Array(b.buffer)};
+async function reunir(){const D={app:'Inventario Peatonal Univalle v0.6',generado:new Date().toISOString(),capas:{}},fotos=[];
+ for(const c of CAPAS)D.capas[c]=(await dbAll(c)).map(r=>{const o={...r},bl=o.fotos||[];o.uid=c+'_'+r.id;o.fotos=bl.map((b,i)=>{const n=o.uid+'_'+(i+1)+'.jpg';fotos.push([n,b]);return n});return o});
+ return{D,fotos}}
+const WKT4326='GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]]';
+async function crearGpkg(D){const SQL=await initSqlJs({locateFile:f=>'lib/'+f}),db=new SQL.Database();
+ db.run('PRAGMA application_id=1196444487');db.run('PRAGMA user_version=10300');
+ db.run(`CREATE TABLE gpkg_spatial_ref_sys(srs_name TEXT NOT NULL,srs_id INTEGER PRIMARY KEY,organization TEXT NOT NULL,organization_coordsys_id INTEGER NOT NULL,definition TEXT NOT NULL,description TEXT);
+CREATE TABLE gpkg_contents(table_name TEXT NOT NULL PRIMARY KEY,data_type TEXT NOT NULL,identifier TEXT UNIQUE,description TEXT DEFAULT '',last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),min_x DOUBLE,min_y DOUBLE,max_x DOUBLE,max_y DOUBLE,srs_id INTEGER);
+CREATE TABLE gpkg_geometry_columns(table_name TEXT NOT NULL,column_name TEXT NOT NULL,geometry_type_name TEXT NOT NULL,srs_id INTEGER NOT NULL,z TINYINT NOT NULL,m TINYINT NOT NULL,CONSTRAINT pk_geom_cols PRIMARY KEY(table_name,column_name))`);
+ db.run('INSERT INTO gpkg_spatial_ref_sys VALUES(?,?,?,?,?,?),(?,?,?,?,?,?),(?,?,?,?,?,?)',['Undefined Cartesian SRS',-1,'NONE',-1,'undefined',null,'Undefined geographic SRS',0,'NONE',0,'undefined',null,'WGS 84',4326,'EPSG',4326,WKT4326,null]);
+ const T=(n,gt,cols,filas)=>{const nom=cols.map(c=>'"'+c[0]+'"').join(',');
+  db.run(`CREATE TABLE "${n}"(fid INTEGER PRIMARY KEY AUTOINCREMENT,geom ${gt},${cols.map(c=>'"'+c[0]+'" '+c[1]).join(',')})`);
+  const q=db.prepare(`INSERT INTO "${n}"(geom,${nom}) VALUES(${'?,'.repeat(cols.length)}?)`);filas.forEach(f=>q.run([f.geom,...cols.map(c=>f[c[0]]??null)]));q.free();
+  const pts=filas.flatMap(f=>f.ext),xs=pts.map(p=>p.lon),ys=pts.map(p=>p.lat),m=a=>a.length?Math[a===xs||a===ys?'min':'min'](...a):null;
+  db.run('INSERT INTO gpkg_contents(table_name,data_type,identifier,min_x,min_y,max_x,max_y,srs_id) VALUES(?,?,?,?,?,?,?,4326)',[n,'features',n,xs.length?Math.min(...xs):null,ys.length?Math.min(...ys):null,xs.length?Math.max(...xs):null,ys.length?Math.max(...ys):null]);
+  db.run('INSERT INTO gpkg_geometry_columns VALUES(?,?,?,4326,0,0)',[n,'geom',gt])};
+ const tr=D.capas.tramos;
+ T('tramos','LINESTRING',[...colsDe('tramos'),['longitud_m','REAL'],['creado','TEXT']],tr.map(r=>({...r,geom:lnBlob(r.vertices),ext:r.vertices})));
+ T('tramos_vertices','POINT',[['tramo_codigo','TEXT'],['orden','INTEGER'],...POSC],tr.flatMap(r=>r.vertices.map((p,i)=>({tramo_codigo:r.codigo,orden:i+1,...dePos(p),geom:ptBlob(p.lon,p.lat),ext:[p]}))));
+ for(const k of['mobiliario','obstaculos'])T(k,'POINT',[...colsDe(k),...POSC,['creado','TEXT']],D.capas[k].map(r=>({...r,...dePos(r.posicion),geom:ptBlob(r.posicion.lon,r.posicion.lat),ext:[r.posicion]})));
+ db.run('CREATE TABLE fotos(fid INTEGER PRIMARY KEY AUTOINCREMENT,capa TEXT,registro TEXT,archivo TEXT)');
+ for(const c of CAPAS)D.capas[c].forEach(r=>r.fotos.forEach(a=>db.run('INSERT INTO fotos(capa,registro,archivo) VALUES(?,?,?)',[c,r.uid,'fotos/'+a])));
+ db.run("INSERT INTO gpkg_contents(table_name,data_type,identifier) VALUES('fotos','attributes','fotos')");
+ const out=db.export();db.close();return out}
+async function exportar(){try{aviso('Generando paquete…');const{D,fotos}=await reunir(),zip=new JSZip();
+ if(!CAPAS.some(c=>D.capas[c].length)){aviso('No hay registros para exportar',1);return}
+ zip.file('inventario_peatonal.gpkg',await crearGpkg(D));zip.file('datos.json',JSON.stringify(D,null,1));
+ fotos.forEach(([n,b])=>zip.file('fotos/'+n,b));
+ for(const f of['crear_gdb.py','LEEME_exportacion.txt'])zip.file(f,await(await fetch(f)).text());
+ const b64=await zip.generateAsync({type:'base64'}),d=new Date(),z=n=>String(n).padStart(2,'0'),nombre=`inventario_peatonal_${d.getFullYear()}${z(d.getMonth()+1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}.zip`;
+ const FS=nativo&&Capacitor.Plugins.Filesystem,SH=nativo&&Capacitor.Plugins.Share;
+ if(FS&&SH){const r=await FS.writeFile({path:'exportes/'+nombre,data:b64,directory:'CACHE',recursive:true});await SH.share({title:nombre,url:r.uri,dialogTitle:'Guardar o compartir el paquete'});aviso('Paquete listo: '+nombre)}
+ else{const a=document.createElement('a');a.href='data:application/zip;base64,'+b64;a.download=nombre;a.click();aviso('Paquete generado')}
+ }catch(e){aviso('No se pudo exportar: '+(e.message||e),1)}}
 abrirDB().then(cargarTR).then(pintarForm).catch(e=>aviso('Base de datos no disponible: '+e,1));
 bucle();
 </script>
