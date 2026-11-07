@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Inventario Peatonal Univalle</title>
+<link rel="stylesheet" href="lib/leaflet.css">
 <style>
 :root{--rojo:#BA0C2F;--osc:#8C0721;--fondo:#F4F6F8;--borde:#DEE2E6;--tinta:#212529;--suave:#495057;--ok:#0B7A4B;--medio:#B45309;--mal:#B42318;--gris:#6B7280}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -36,19 +37,21 @@ input,select{width:100%;padding:11px;border:1px solid #ADB5BD;border-radius:8px;
 #msg{position:fixed;left:10px;right:10px;bottom:max(12px,env(safe-area-inset-bottom));padding:12px;border-radius:8px;background:var(--tinta);color:#fff;font-size:.9rem;display:none;z-index:9}
 #msg.mal{background:var(--mal)}
 pre{white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto;background:#F8F9FA;padding:8px;border-radius:6px;margin-top:6px;font-size:.7rem}
+#mapa{height:58vh;border-radius:8px;border:1px solid var(--borde);margin-bottom:8px}.fotos{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.fotos div{position:relative}.fotos img{width:76px;height:76px;object-fit:cover;border-radius:6px;border:1px solid var(--borde)}.fotos button{position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:50%;border:0;background:var(--mal);color:#fff;font-weight:700}label.btn{display:block;text-align:center}
 details{font-size:.8rem;color:var(--suave)}.oculto{display:none}
 </style>
 </head>
 <body>
-<header><h1>Inventario Peatonal Univalle <small>v0.4</small></h1>
+<header><h1>Inventario Peatonal Univalle <small>v0.5</small></h1>
 <div class="enlace"><i class="punto" id="punto"></i><span id="enlace">Buscando receptor</span></div></header>
-<nav><button id="nCaptura" class="on" onclick="ver('Captura')">Captura</button><button id="nReceptor" onclick="ver('Receptor')">Receptor</button><button id="nRegistros" onclick="ver('Registros')">Registros</button></nav>
+<nav><button id="nCaptura" class="on" onclick="ver('Captura')">Captura</button><button id="nReceptor" onclick="ver('Receptor')">Receptor</button><button id="nMapa" onclick="ver('Mapa')">Mapa</button><button id="nRegistros" onclick="ver('Registros')">Registros</button></nav>
 <div class="mini" id="mini"><b id="mSol">Sin datos</b><span id="mDet"></span></div>
 
 <section id="vCaptura">
 <div class="seg" id="seg"></div>
 <div id="form"></div>
 <div class="bloque" id="geo"></div>
+<div class="bloque" id="fotos"></div>
 <button class="btn" onclick="guardarRegistro()">Guardar registro</button>
 </section>
 
@@ -76,9 +79,13 @@ details{font-size:.8rem;color:var(--suave)}.oculto{display:none}
 <div class="fila"><span>Última respuesta</span><b id="ult">-</b></div><pre id="diag"></pre><pre id="xml"></pre></details>
 </section>
 
+<section id="vMapa" class="oculto"><div class="seg"><button id="bOsm" class="on" onclick="baseMapa('osm')">Calles</button><button id="bSat" onclick="baseMapa('sat')">Satélite</button></div>
+<div id="mapa"></div><div class="dos"><button class="btn sec" onclick="centrar()">Mi posición</button><button class="btn sec" onclick="descargarZona()">Descargar zona</button></div>
+<div class="fila" style="margin-top:8px"><span>Teselas guardadas offline</span><b id="nTeselas">0</b></div></section>
 <section id="vRegistros" class="oculto"><div id="lista"></div></section>
 <div id="msg"></div>
 
+<script src="lib/leaflet.js"></script>
 <script>
 window.onerror=function(m){aviso('Error en la app: '+m,1)};
 //#PROJ
@@ -99,7 +106,7 @@ let _t;function aviso(t,mal){const m=$('msg');m.textContent=t;m.className=mal?'m
 
 // ---------- Base de datos local (IndexedDB) ----------
 const CAPAS=['tramos','mobiliario','obstaculos'];let db;
-const abrirDB=()=>new Promise((ok,no)=>{const r=indexedDB.open('inventario_peatonal',1);r.onupgradeneeded=()=>CAPAS.forEach(c=>r.result.createObjectStore(c,{keyPath:'id',autoIncrement:true}));r.onsuccess=()=>{db=r.result;ok()};r.onerror=()=>no(r.error)});
+const abrirDB=()=>new Promise((ok,no)=>{const r=indexedDB.open('inventario_peatonal',2);r.onupgradeneeded=()=>{const d=r.result;CAPAS.forEach(c=>{if(!d.objectStoreNames.contains(c))d.createObjectStore(c,{keyPath:'id',autoIncrement:true})});if(!d.objectStoreNames.contains('tiles'))d.createObjectStore('tiles')};r.onsuccess=()=>{db=r.result;ok()};r.onerror=()=>no(r.error)});
 const rq=r=>new Promise((ok,no)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});
 const st=(c,m)=>db.transaction(c,m).objectStore(c);
 const dbAdd=(c,o)=>rq(st(c,'readwrite').add(o)),dbAll=c=>rq(st(c,'readonly').getAll()),dbDel=(c,id)=>rq(st(c,'readwrite').delete(id));
@@ -119,31 +126,32 @@ tramos:{t:'Tramos',geo:'linea',c:[
 ['estado','Estado','sel',1,EST],['podotactil','Podotáctil','sel',0,['Sí','No','Parcial']],
 ['galibo_h','Gálibo horizontal (m)','num',0],['galibo_v','Gálibo vertical (m)','num',0],['observaciones','Observaciones','texto',0]]},
 mobiliario:{t:'Mobiliario',geo:'punto',c:[
-['tramo','Tramo asociado','tramo',1],['tipo','Tipo de elemento','sel',1,['Banca','Luminaria','Papelera','Fuente de agua','Árbol']],
+['tipo','Tipo de elemento','sel',1,['Banca','Luminaria','Papelera','Fuente de agua','Árbol']],
 ['estado','Estado','sel',1,EST],['funciona','Funciona','sel',0,SI,f=>['Luminaria','Fuente de agua'].includes(f.tipo)],
 ['sombra','Sombra proyectada','sel',0,['Sin sombra','Parcial','Total'],f=>f.tipo==='Árbol'],['observaciones','Observaciones','texto',0]]},
 obstaculos:{t:'Obstáculos',geo:'punto',c:[
-['tramo','Tramo asociado','tramo',1],['categoria','Categoría','sel',1,['Fijo','Temporal']],
+['categoria','Categoría','sel',1,['Fijo','Temporal']],
 ['tipo','Tipo','sel',1,f=>f.categoria==='Fijo'?['Poste','Armario o gabinete','Paradero','Vegetación']:f.categoria==='Temporal'?['Comercio informal','Vehículos','Obras']:[]],
 ['ancho_libre','Ancho libre restante (m)','num',0],['afecta','Afecta la circulación','sel',0,SI],['observaciones','Observaciones','texto',0]]}};
-let capa='tramos',F={},V=[],P=null,TR=[];
+let capa='tramos',F={},V=[],P=null,FO=[],TR=[];const S={};
 
 function campo(c){const[k,et,tp,rq_,op,vis]=c;if(vis&&!vis(F))return'';const v=F[k]??'';let ctl;
  if(tp==='sel'||tp==='tramo'){const o=tp==='tramo'?TR.map(t=>t.codigo):(typeof op==='function'?op(F):op);
+  if(!o.length)return`<label class="campo"><span>${et}${rq_?' *':''}</span><select disabled><option>Elija primero la categoría</option></select></label>`;
   ctl=`<select data-k="${k}"><option value="">Seleccione</option>${o.map(x=>`<option${x===v?' selected':''}>${esc(x)}</option>`).join('')}</select>`}
  else ctl=`<input data-k="${k}" type="${tp==='num'?'number':'text'}" ${tp==='num'?'step="any" inputmode="decimal"':''} value="${esc(v)}">`;
  return`<label class="campo"><span>${et}${rq_?' *':''}</span>${ctl}</label>`}
 function pintarForm(){const e=ESQ[capa];$('form').innerHTML=e.c.map(campo).join('');
- $('seg').innerHTML=CAPAS.map(c=>`<button class="${c===capa?'on':''}" onclick="elegir('${c}')">${ESQ[c].t}</button>`).join('');pintarGeo()}
+ pintarFotos();$('seg').innerHTML=CAPAS.map(c=>`<button class="${c===capa?'on':''}" onclick="elegir('${c}')">${ESQ[c].t}</button>`).join('');pintarGeo()}
 function long(v){let s=0;for(let i=1;i<v.length;i++)s+=Math.hypot(v[i].x9377-v[i-1].x9377,v[i].y9377-v[i-1].y9377);return s}
 function resumen(p){return`${p.solucion} · PDOP ${p.pdop??'-'} · ±${p.hrms??'-'} m · ${p.sats} sat`}
 function pintarGeo(){const e=ESQ[capa];
  if(e.geo==='linea')$('geo').innerHTML=`<h2>Recorrido</h2><div class="fila"><span>Vértices</span><b>${V.length}</b></div><div class="fila"><span>Longitud aproximada</span><b>${long(V).toFixed(1)} m</b></div>${V.length?`<div class="fila"><span>Último vértice</span><b>${esc(resumen(V[V.length-1]))}</b></div>`:''}<div class="dos"><button class="btn sec" onclick="addV()">Agregar vértice</button><button class="btn sec" onclick="quitarV()">Quitar último</button></div>`;
  else $('geo').innerHTML=`<h2>Posición</h2>${P?`<div class="fila"><span>Solución</span><b>${esc(resumen(P))}</b></div><div class="fila"><span>Lat / Lon</span><b>${P.lat.toFixed(9)} / ${P.lon.toFixed(9)}</b></div>`:'<div class="fila"><span>Sin posición capturada</span></div>'}<button class="btn sec" onclick="capturar()">${P?'Capturar de nuevo':'Capturar posición'}</button>`}
 async function cargarTR(){TR=await dbAll('tramos')}
-async function elegir(c){capa=c;const t=F.tramo;F={};if(t&&c!=='tramos')F.tramo=t;V=[];P=null;await cargarTR();pintarForm()}
+async function elegir(c){S[capa]={F,V,P,FO};capa=c;const b=S[c]||{F:{},V:[],P:null,FO:[]};F=b.F;V=b.V;P=b.P;FO=b.FO;await cargarTR();pintarForm()}
 document.addEventListener('input',e=>{const k=e.target.dataset.k;if(k)F[k]=e.target.value});
-document.addEventListener('change',e=>{if(e.target.dataset.k&&e.target.tagName==='SELECT'){F[e.target.dataset.k]=e.target.value;pintarForm()}});
+document.addEventListener('change',e=>{if(e.target.dataset.k&&e.target.tagName==='SELECT'){F[e.target.dataset.k]=e.target.value;ESQ[capa].c.forEach(c=>{if(typeof c[4]==='function'&&F[c[0]]&&!c[4](F).includes(F[c[0]]))delete F[c[0]]});pintarForm()}});
 
 // ---------- Captura ----------
 function instantanea(){const u=ultimo;if(!u||Date.now()-u.t>3000){aviso('Sin datos del receptor. Revisa la pestaña Receptor.',1);return null}
@@ -159,14 +167,14 @@ function validar(){const e=ESQ[capa];
 async function guardarRegistro(){const e=ESQ[capa],err=validar();if(err){aviso(err,1);return}
  const rec={creado:new Date().toISOString()};e.c.forEach(c=>{const[k,,tp,,,vis]=c;if(!vis||vis(F))rec[k]=tp==='num'&&F[k]!==''&&F[k]!==undefined?+F[k]:(F[k]??'').toString().trim()});
  if(e.geo==='linea'){rec.vertices=V;rec.longitud_m=+long(V).toFixed(2)}else rec.posicion=P;
- try{await dbAdd(capa,rec);aviso('Registro guardado');const t=F.tramo;F={};if(t&&capa!=='tramos')F.tramo=t;V=[];P=null;await cargarTR();pintarForm()}catch(x){aviso('No se pudo guardar: '+x,1)}}
+ rec.fotos=FO.map(f=>f.blob);try{await dbAdd(capa,rec);aviso('Registro guardado');F={};V=[];P=null;FO=[];await cargarTR();pintarForm()}catch(x){aviso('No se pudo guardar: '+x,1)}}
 
 // ---------- Registros ----------
 async function pintarLista(){let h='';for(const c of CAPAS){const d=await dbAll(c);
- h+=`<div class="bloque"><h2>${ESQ[c].t} (${d.length})</h2>${d.slice().reverse().map(r=>`<div class="item"><span>${esc(r.codigo||r.tipo||'')}${r.tramo?' · '+esc(r.tramo):''}<br><small>${r.vertices?r.vertices.length+' vértices · '+r.longitud_m+' m':esc(r.posicion.solucion)}</small></span><button onclick="borrarReg('${c}',${r.id})">Borrar</button></div>`).join('')||'<div class="fila"><span>Sin registros</span></div>'}</div>`}
+ h+=`<div class="bloque"><h2>${ESQ[c].t} (${d.length})</h2>${d.slice().reverse().map(r=>`<div class="item"><span>${esc(r.codigo||r.tipo||'')}<br><small>${r.vertices?r.vertices.length+' vértices · '+r.longitud_m+' m':esc(r.posicion.solucion)}${r.fotos&&r.fotos.length?' · '+r.fotos.length+' foto(s)':''}</small></span><button onclick="borrarReg('${c}',${r.id})">Borrar</button></div>`).join('')||'<div class="fila"><span>Sin registros</span></div>'}</div>`}
  $('lista').innerHTML=h}
 async function borrarReg(c,id){if(confirm('¿Borrar este registro?')){await dbDel(c,id);pintarLista()}}
-function ver(n){['Captura','Receptor','Registros'].forEach(x=>{$('v'+x).classList.toggle('oculto',x!==n);$('n'+x).classList.toggle('on',x===n)});if(n==='Registros')pintarLista();if(n==='Captura')cargarTR().then(pintarForm)}
+function ver(n){['Captura','Receptor','Registros','Mapa'].forEach(x=>{$('v'+x).classList.toggle('oculto',x!==n);$('n'+x).classList.toggle('on',x===n)});if(n==='Registros')pintarLista();if(n==='Captura')cargarTR().then(pintarForm);if(n==='Mapa')abrirMapa()}
 
 // ---------- Lectura del receptor ----------
 const BASE='http://192.168.10.1';
@@ -198,7 +206,7 @@ function pintarGps(t){const d=xml(t),tipo=val(d,'POSITION > TYPE'),info=TIPOS[ti
  $('hora').textContent=(val(d,'TIME > GPSDATE')+' '+val(d,'TIME > GPSTIME')).trim()||'-';
  if(lat!==null&&lon!==null){const c=coords(lat,lon);$('c3115').textContent=c.x3115.toFixed(2)+' / '+c.y3115.toFixed(2);$('c9377').textContent=c.x9377.toFixed(2)+' / '+c.y9377.toFixed(2);
   ultimo={lat,lon,alt,tipo,sol:info[0],pdop:pd,hdop:num(val(d,'DOP > HDOP')),hrms:hr,vrms:num(val(d,'RMS > VRMS')),sats:sat,edad:usa?ed:null,hora:(val(d,'TIME > GPSDATE')+' '+val(d,'TIME > GPSTIME')).trim(),t:Date.now()}}
- $('cGps').textContent=val(d,'SATELITES > GPS')||'-';$('cGlo').textContent=val(d,'SATELITES > GLONASS')||'-';$('cBds').textContent=val(d,'SATELITES > BEIDOU')||'-';$('cGal').textContent=val(d,'SATELITES > GALILEO')||'-';
+ posMapa();$('cGps').textContent=val(d,'SATELITES > GPS')||'-';$('cGlo').textContent=val(d,'SATELITES > GLONASS')||'-';$('cBds').textContent=val(d,'SATELITES > BEIDOU')||'-';$('cGal').textContent=val(d,'SATELITES > GALILEO')||'-';
  $('hv').textContent=(val(d,'DOP > HDOP')||'-')+' / '+(vd===null||vd>=9999?'-':vd);$('ref').textContent=usa?(val(d,'REFSTATION > ID')||'-'):'Sin correcciones';$('xml').textContent=t.slice(0,3000)}
 const pintarDev=t=>{const n=val(xml(t),'POWER_LEVEL');$('bat').textContent=n?n+' %':'-'};
 function enlace(ok){$('punto').style.background=ok?'var(--ok)':'var(--mal)';$('enlace').textContent=ok?'Receptor conectado':'Sin respuesta del receptor';
@@ -206,7 +214,42 @@ function enlace(ok){$('punto').style.background=ok?'var(--ok)':'var(--mal)';$('e
 async function bucle(){try{pintarGps(await leer('/realtime/gps.xml'));if(ciclo++%5===0)pintarDev(await leer('/config/device.xml'));ultimoOk=Date.now();enlace(true);$('ult').textContent=new Date().toLocaleTimeString()}
  catch(e){if(Date.now()-ultimoOk>3000)enlace(false);$('xml').textContent=String(e)}
  $('via').textContent=nativo?viaWifi:'No aplica (navegador)';setTimeout(bucle,1000)}
-const C=window.Capacitor;$('diag').textContent=['App v0.4','Nativa: '+(nativo?'sí':'no'),'Componente Receptor: '+(Receptor?'disponible':'no disponible'),'Componentes: '+(C&&C.Plugins?Object.keys(C.Plugins).join(', '):'-')].join('\n');
+const C=window.Capacitor;$('diag').textContent=['App v0.5','Nativa: '+(nativo?'sí':'no'),'Componente Receptor: '+(Receptor?'disponible':'no disponible'),'Componentes: '+(C&&C.Plugins?Object.keys(C.Plugins).join(', '):'-')].join('\n');
+
+// ---------- Fotos ----------
+function redimensionar(f){return new Promise((ok,no)=>{const im=new Image(),u=URL.createObjectURL(f);im.onload=()=>{const k=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);c.toBlob(b=>b?ok(b):no(new Error('Foto no válida')),'image/jpeg',0.82)};im.onerror=()=>no(new Error('No se pudo leer la foto'));im.src=u})}
+async function nuevaFoto(inp){for(const f of inp.files){try{const b=await redimensionar(f);FO.push({blob:b,url:URL.createObjectURL(b)})}catch(e){aviso(e.message,1)}}inp.value='';pintarFotos()}
+function quitarFoto(i){FO.splice(i,1);pintarFotos()}
+function pintarFotos(){$('fotos').innerHTML=`<h2>Fotos (${FO.length})</h2><div class="dos"><label class="btn sec">Tomar foto<input type="file" accept="image/*" capture="environment" hidden onchange="nuevaFoto(this)"></label><label class="btn sec">Galería<input type="file" accept="image/*" multiple hidden onchange="nuevaFoto(this)"></label></div><div class="fotos">${FO.map((f,i)=>`<div><img src="${f.url}"><button onclick="quitarFoto(${i})">×</button></div>`).join('')}</div>`}
+
+// ---------- Mapa con caché offline ----------
+let mapa,capaBase,capaDatos,marcaPos,circPos,baseAct='osm';
+const BASES={osm:{u:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',a:'© OpenStreetMap'},sat:{u:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',a:'Esri, Maxar, Earthstar Geographics'}};
+const tGet=k=>rq(st('tiles','readonly').get(k)),tPut=(k,b)=>rq(st('tiles','readwrite').put(b,k)),tCount=()=>rq(st('tiles','readonly').count());
+async function teselaBlob(k,url){let b=await tGet(k);if(!b){const r=await fetch(url);if(!r.ok)throw new Error('HTTP '+r.status);b=await r.blob();await tPut(k,b)}return b}
+function crearCapa(){const C=L.TileLayer.extend({createTile(c,done){const im=document.createElement('img'),k=this.options.clave+'/'+c.z+'/'+c.x+'/'+c.y;
+ teselaBlob(k,this.getTileUrl(c)).then(b=>{im.onload=()=>{URL.revokeObjectURL(im.src);done(null,im)};im.src=URL.createObjectURL(b)}).catch(e=>done(e,im));return im}});
+ return new C(BASES[baseAct].u,{clave:baseAct,maxZoom:19,attribution:BASES[baseAct].a})}
+function abrirMapa(){if(typeof L==='undefined'){$('mapa').innerHTML='<p style="padding:12px">El mapa no está disponible en esta versión.</p>';return}
+ if(!mapa){mapa=L.map('mapa').setView(ultimo?[ultimo.lat,ultimo.lon]:[3.3745,-76.5337],17);capaBase=crearCapa().addTo(mapa);capaDatos=L.layerGroup().addTo(mapa)}
+ setTimeout(()=>{mapa.invalidateSize();datosMapa();contarT()},60)}
+function baseMapa(b){baseAct=b;$('bOsm').className=b==='osm'?'on':'';$('bSat').className=b==='sat'?'on':'';if(mapa){mapa.removeLayer(capaBase);capaBase=crearCapa().addTo(mapa)}}
+async function datosMapa(){capaDatos.clearLayers();const ll=v=>v.map(x=>[x.lat,x.lon]);
+ for(const r of await dbAll('tramos'))L.polyline(ll(r.vertices),{color:'#BA0C2F',weight:4}).bindPopup('Tramo '+esc(r.codigo)).addTo(capaDatos);
+ for(const[c,col]of[['mobiliario','#0B7A4B'],['obstaculos','#B45309']])for(const r of await dbAll(c))L.circleMarker([r.posicion.lat,r.posicion.lon],{radius:7,color:'#fff',weight:2,fillColor:col,fillOpacity:1}).bindPopup(esc(r.tipo)).addTo(capaDatos);
+ const bv=capa==='tramos'?V:((S.tramos&&S.tramos.V)||[]);if(bv.length)L.polyline(ll(bv),{color:'#212529',weight:3,dashArray:'6 6'}).addTo(capaDatos)}
+function posMapa(){if(!mapa||$('vMapa').classList.contains('oculto')||!ultimo)return;const q=[ultimo.lat,ultimo.lon];
+ if(!marcaPos){marcaPos=L.circleMarker(q,{radius:7,color:'#fff',weight:2,fillColor:'#0D6EFD',fillOpacity:1}).addTo(mapa);circPos=L.circle(q,{radius:Math.max(ultimo.hrms||1,0.5),color:'#0D6EFD',weight:1,fillOpacity:.12}).addTo(mapa)}
+ else{marcaPos.setLatLng(q);circPos.setLatLng(q);circPos.setRadius(Math.max(ultimo.hrms||1,0.5))}}
+function centrar(){if(!ultimo||!mapa){aviso('Sin posición del receptor',1);return}mapa.setView([ultimo.lat,ultimo.lon],Math.max(mapa.getZoom(),18))}
+const lon2x=(o,z)=>Math.floor((o+180)/360*2**z),lat2y=(a,z)=>{const r=a*Math.PI/180;return Math.floor((1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*2**z)};
+const contarT=()=>tCount().then(n=>$('nTeselas').textContent=n);
+async function descargarZona(){if(!mapa)return;const b=mapa.getBounds(),z0=mapa.getZoom(),z1=Math.min(19,z0+2),L_=[];
+ for(let z=z0;z<=z1;z++)for(let x=lon2x(b.getWest(),z);x<=lon2x(b.getEast(),z);x++)for(let y=lat2y(b.getNorth(),z);y<=lat2y(b.getSouth(),z);y++)L_.push([z,x,y]);
+ if(L_.length>600){aviso('Zona muy grande ('+L_.length+' teselas). Acércate en el mapa.',1);return}
+ const u=BASES[baseAct].u;let hechas=0,fallos=0;
+ for(let i=0;i<L_.length;i+=6){await Promise.all(L_.slice(i,i+6).map(([z,x,y])=>teselaBlob(baseAct+'/'+z+'/'+x+'/'+y,u.replace('{z}',z).replace('{x}',x).replace('{y}',y)).catch(()=>fallos++)));hechas=Math.min(i+6,L_.length);aviso('Descargando '+hechas+' de '+L_.length)}
+ await contarT();aviso(fallos?'Descarga con '+fallos+' fallos. ¿Hay internet?':'Zona guardada para uso sin internet',!!fallos)}
 abrirDB().then(cargarTR).then(pintarForm).catch(e=>aviso('Base de datos no disponible: '+e,1));
 bucle();
 </script>
