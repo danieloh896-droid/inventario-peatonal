@@ -1,5 +1,8 @@
 #!/bin/bash
 set -e
+mkdir -p www/lib
+cp node_modules/leaflet/dist/leaflet.js node_modules/leaflet/dist/leaflet.css www/lib/
+cp -r node_modules/leaflet/dist/images www/lib/
 DEST=android/app/src/main/java/co/edu/univalle/inventariopeatonal
 mkdir -p "$DEST"
 cp android-overrides/*.java "$DEST"/
