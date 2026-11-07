@@ -11,7 +11,8 @@ M=android/app/src/main/AndroidManifest.xml
 sed -i 's#<application#<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />\n    <application android:usesCleartextTraffic="true"#' "$M"
 echo "Manifiesto preparado:"; grep -n -E "ClearText|cleartext|NETWORK_STATE" "$M"
 
-# Icono de la aplicación (solo si existe assets/icon-only.png)
-if [ -f assets/icon-only.png ]; then
-  npx --yes @capacitor/assets generate --android || echo "No se pudo generar el icono"
+# Icono de la aplicación (si existe la carpeta android-res con los iconos ya generados)
+if [ -d android-res ]; then
+  cp -r android-res/* android/app/src/main/res/
+  echo "Iconos copiados"
 fi
